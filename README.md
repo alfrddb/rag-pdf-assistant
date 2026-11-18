@@ -2,6 +2,8 @@
 
 A lightweight, production-oriented Retrieval-Augmented Generation (RAG) application built from scratch in Python. Designed without heavy orchestration frameworks (such as LangChain or LlamaIndex) to demonstrate full control over vector operations, hybrid retrieval mechanics, and hallucination mitigation.
 
+🌐 **Live Demo:** [Try the live app here!](https://rag-pdf-assistant-nbjy5i4g4jvtyjcs2p5nfj.streamlit.app/)
+
 ## 🚀 Key Features
 
 * **Hybrid Search Architecture (Dense + Sparse):** Combines semantic similarity via dense vector embeddings (`gemini-embedding-001` + `NumPy` cosine similarity) with exact keyword matching via **BM25** (`rank_bm25`) using a weighted scoring fusion (60% Semantic / 40% Lexical).
