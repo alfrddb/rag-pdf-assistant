@@ -38,15 +38,18 @@ def extract_and_chunk_pdf(uploaded_file, chunk_size=1000, overlap=200):
     return chunks
 
 def get_embeddings(texts):
-    batch_size = 100
+    batch_size = 50
     all_embeddings = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
         response = client.models.embed_content(
-            model="gemini-embedding-001",
+            model="text-embedding-004",
             contents=batch,
         )
-        all_embeddings.extend([e.values for e in response.embeddings])
+        for e in response.embeddings:
+            # Gestisce sia dizionari che oggetti con attributo values
+            val = e.values if hasattr(e, "values") else e["values"]
+            all_embeddings.append(val)
     return np.array(all_embeddings, dtype=np.float32)
 
 def hybrid_retrieve_top_k(query, chunks, chunk_embeddings, bm25_index, k=4):
