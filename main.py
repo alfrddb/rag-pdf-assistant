@@ -38,7 +38,7 @@ def extract_and_chunk_pdf(uploaded_file, chunk_size=1000, overlap=200):
     return chunks
 
 def get_embeddings(texts):
-    batch_size = 20
+    batch_size = 16
     all_embeddings = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
