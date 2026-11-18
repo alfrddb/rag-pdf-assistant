@@ -43,7 +43,7 @@ def get_embeddings(texts):
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
         response = client.models.embed_content(
-            model="gemini-embedding-001",
+            model="gemini-embedding-2",
             contents=batch,
         )
         for e in response.embeddings:
