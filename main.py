@@ -38,17 +38,15 @@ def extract_and_chunk_pdf(uploaded_file, chunk_size=1000, overlap=200):
     return chunks
 
 def get_embeddings(texts):
-    batch_size = 16
     all_embeddings = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
+    for text in texts:
         response = client.models.embed_content(
-            model="gemini-embedding-2",
-            contents=batch,
+            model="gemini-embedding-001",
+            contents=text,
         )
-        for e in response.embeddings:
-            val = e.values if hasattr(e, "values") else e["values"]
-            all_embeddings.append(val)
+        # Estrae il vettore in modo sicuro indipendentemente dal formato dell'oggetto restituito
+        embedding_values = response.embedding.values if hasattr(response, "embedding") else response.embeddings[0].values
+        all_embeddings.append(embedding_values)
     return np.array(all_embeddings, dtype=np.float32)
 
 def hybrid_retrieve_top_k(query, chunks, chunk_embeddings, bm25_index, k=4):
