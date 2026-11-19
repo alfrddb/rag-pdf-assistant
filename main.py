@@ -1,15 +1,17 @@
 import os
+import time
 import numpy as np
 import streamlit as st
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
 
 load_dotenv()
 
 st.set_page_config(page_title="Advanced RAG Document Assistant", page_icon="📄", layout="wide")
+
 
 @st.cache_resource
 def get_genai_client():
@@ -19,7 +21,9 @@ def get_genai_client():
         st.stop()
     return genai.Client(api_key=api_key)
 
+
 client = get_genai_client()
+
 
 def extract_and_chunk_pdf(uploaded_file, chunk_size=1000, overlap=200):
     reader = PdfReader(uploaded_file)
@@ -32,22 +36,41 @@ def extract_and_chunk_pdf(uploaded_file, chunk_size=1000, overlap=200):
         start = 0
         while start < len(text):
             end = start + chunk_size
-            chunk_text = text[start:end]
-            chunks.append({"text": chunk_text, "page": page_num})
+            chunk_text = text[start:end].strip()
+            if chunk_text:
+                chunks.append({"text": chunk_text, "page": page_num})
             start += chunk_size - overlap
     return chunks
 
-def get_embeddings(texts):
+
+def get_embeddings(texts, batch_size=20, delay_seconds=1.0):
     all_embeddings = []
-    for text in texts:
-        response = client.models.embed_content(
-            model="gemini-embedding-001",
-            contents=text,
-        )
-        # Estrae il vettore in modo sicuro indipendentemente dal formato dell'oggetto restituito
-        embedding_values = response.embedding.values if hasattr(response, "embedding") else response.embeddings[0].values
-        all_embeddings.append(embedding_values)
+    valid_texts = [t.strip() for t in texts if t and t.strip()]
+    if not valid_texts:
+        return np.empty((0, 768), dtype=np.float32)
+
+    for i in range(0, len(valid_texts), batch_size):
+        batch = valid_texts[i : i + batch_size]
+        for attempt in range(3):
+            try:
+                response = client.models.embed_content(
+                    model="gemini-embedding-001",
+                    contents=batch,
+                )
+                for emb in response.embeddings:
+                    all_embeddings.append(emb.values)
+                if delay_seconds > 0 and i + batch_size < len(valid_texts):
+                    time.sleep(delay_seconds)
+                break
+            except errors.APIError as e:
+                if e.code == 429 and attempt < 2:
+                    time.sleep(2 ** (attempt + 1))
+                    continue
+                st.error(f"Errore API Gemini ({e.code}): {e.message}")
+                st.stop()
+
     return np.array(all_embeddings, dtype=np.float32)
+
 
 def hybrid_retrieve_top_k(query, chunks, chunk_embeddings, bm25_index, k=4):
     tokenized_query = query.lower().split()
@@ -57,7 +80,7 @@ def hybrid_retrieve_top_k(query, chunks, chunk_embeddings, bm25_index, k=4):
     else:
         bm25_scores = np.zeros_like(bm25_scores)
 
-    query_embedding = get_embeddings([query])[0]
+    query_embedding = get_embeddings([query], batch_size=1, delay_seconds=0)[0]
     norm_chunks = chunk_embeddings / np.linalg.norm(chunk_embeddings, axis=1, keepdims=True)
     norm_query = query_embedding / np.linalg.norm(query_embedding)
     vector_scores = np.dot(norm_chunks, norm_query)
@@ -67,6 +90,7 @@ def hybrid_retrieve_top_k(query, chunks, chunk_embeddings, bm25_index, k=4):
     top_indices = np.argsort(hybrid_scores)[::-1][:k]
 
     return [(chunks[i], float(hybrid_scores[i])) for i in top_indices]
+
 
 st.title("📄 Advanced Hybrid RAG Assistant")
 st.caption("Native Python RAG pipeline featuring Dense Vector Search, BM25 Keyword Search, and Gemini 3.5 Flash-Lite.")
@@ -90,11 +114,11 @@ with st.sidebar:
         if uploaded_file.name != st.session_state.current_file:
             progress_bar = st.progress(0)
             status_text = st.empty()
-            
+
             status_text.text("Extracting and chunking text...")
             progress_bar.progress(25)
             chunks = extract_and_chunk_pdf(uploaded_file)
-            
+
             if not chunks:
                 st.error("Unable to extract text from this PDF.")
             else:
@@ -103,17 +127,17 @@ with st.sidebar:
                 texts = [c["text"] for c in chunks]
                 tokenized_corpus = [text.lower().split() for text in texts]
                 bm25_index = BM25Okapi(tokenized_corpus)
-                
+
                 status_text.text("Computing semantic embeddings...")
                 progress_bar.progress(75)
                 embeddings = get_embeddings(texts)
-                
+
                 st.session_state.chunks = chunks
                 st.session_state.embeddings = embeddings
                 st.session_state.bm25 = bm25_index
                 st.session_state.current_file = uploaded_file.name
                 st.session_state.messages = []
-                
+
                 progress_bar.progress(100)
                 status_text.empty()
                 st.success(f"Successfully indexed {len(chunks)} chunks with Hybrid Search!")
@@ -146,13 +170,13 @@ if prompt := st.chat_input("Ask a question about the active document..."):
     with st.chat_message("assistant"):
         with st.spinner("Executing hybrid retrieval and generating response..."):
             retrieved = hybrid_retrieve_top_k(
-                prompt, 
-                st.session_state.chunks, 
-                st.session_state.embeddings, 
-                st.session_state.bm25, 
-                k=4
+                prompt,
+                st.session_state.chunks,
+                st.session_state.embeddings,
+                st.session_state.bm25,
+                k=4,
             )
-            
+
             context_blocks = [f"[Page {c['page']}]: {c['text']}" for c, _ in retrieved]
             context_str = "\n\n---\n\n".join(context_blocks)
 
@@ -165,14 +189,18 @@ if prompt := st.chat_input("Ask a question about the active document..."):
 
             full_prompt = f"CONTEXT:\n{context_str}\n\nQUESTION:\n{prompt}"
 
-            response = client.models.generate_content(
-                model="gemini-3.5-flash-lite",
-                contents=full_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    temperature=0.1,
-                ),
-            )
+            try:
+                response = client.models.generate_content(
+                    model="gemini-3.5-flash-lite",
+                    contents=full_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.1,
+                    ),
+                )
+            except errors.APIError as e:
+                st.error(f"Errore API Gemini ({e.code}): {e.message}")
+                st.stop()
 
             answer = response.text
             st.markdown(answer)
@@ -186,5 +214,5 @@ if prompt := st.chat_input("Ask a question about the active document..."):
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": answer,
-                "sources": sources_data
+                "sources": sources_data,
             })
